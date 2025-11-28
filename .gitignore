@@ -134,3 +134,8 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Visual Studio tarafi (Erisim hatasi vermemesi icin SART)
+.vs/
+obj/
+*.user
