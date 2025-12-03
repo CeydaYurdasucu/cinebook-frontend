@@ -152,12 +152,44 @@ export const api = {
     },
 
     // Harici API Arama (Internal DB)
-    search: async (query: string): Promise<any[]> => {
+    /*search: async (query: string): Promise<any[]> => {
         const mockFallback = mockContent.filter(c => c.title.toLowerCase().includes(query.toLowerCase()));
         const response = await fetch(`${API_BASE_URL}/MediaItem?query=${encodeURIComponent(query)}`, {
             method: "GET",
         });
         return handleResponse(response, mockFallback);
+    },*/
+
+    // Tüm MediaItem listesini backend'den çek ve FRONTEND tarafında filtrele
+    search: async (query: string): Promise<any[]> => {
+        // 1) Backend’den tüm medya verilerini çek
+        const response = await fetch(`${API_BASE_URL}/MediaItem`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+
+        const allItems = await response.json();
+
+        // 2) Frontend içinde filtrele
+        const filtered = allItems.filter((item: any) =>
+            item.title.toLowerCase().includes(query.toLowerCase())
+        );
+
+        return filtered;
+    },
+
+    getTopRated: async () => {
+        const response = await fetch(`${API_BASE_URL}/MediaItem`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+
+        const allItems = await response.json();
+
+        return allItems
+            .filter((item: any) => item.rating != null)
+            .sort((a: any, b: any) => b.rating - a.rating)
+            .slice(0, 10);
     },
 
     // Harici Medya Çekme (FetchMediaRequest DTO)
