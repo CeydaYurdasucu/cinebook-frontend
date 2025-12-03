@@ -178,6 +178,16 @@ export const api = {
         return filtered;
     },
 
+    //cntent detail için 
+    getMediaItemById: async (id: number): Promise<any> => {
+        const response = await fetch(`${API_BASE_URL}/MediaItem/${id}`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+        return handleResponse(response);
+    },
+
+
     getTopRated: async () => {
         const response = await fetch(`${API_BASE_URL}/MediaItem`, {
             method: "GET",
