@@ -490,5 +490,17 @@ export const api = {
     },
 
 
+    // O Medyaya ait TÜM yorumları getir
+    getReviewsByMediaId: async (mediaItemId: number): Promise<any[]> => {
+        const response = await fetch(`${API_BASE_URL}/Review/media/${mediaItemId}`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+
+        if (!response.ok) return [];
+        return await response.json();
+    },
+
+
 
 };

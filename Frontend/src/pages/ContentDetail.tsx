@@ -295,7 +295,7 @@ export default function ContentDetail() {
 
                         {/* COMMENTS */}
                         <section className="bg-[#0A1A2F]/70 rounded-3xl p-8 border border-[#0A1A2F]">
-                            <CommentSection />
+                            <CommentSection mediaId={mediaId} />
                         </section>
                     </div>
 
