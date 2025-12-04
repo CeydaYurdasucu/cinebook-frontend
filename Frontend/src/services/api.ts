@@ -197,10 +197,11 @@ export const api = {
         const allItems = await response.json();
 
         return allItems
-            .filter((item: any) => item.rating != null)
-            .sort((a: any, b: any) => b.rating - a.rating)
+            .filter((item: any) => item.averageRating != null)
+            .sort((a: any, b: any) => b.averageRating - a.averageRating)
             .slice(0, 10);
     },
+
 
     // Harici Medya Çekme (FetchMediaRequest DTO)
     fetchExternalMedia: async (externalId: string, mediaType: string): Promise<any> => {
@@ -462,4 +463,32 @@ export const api = {
         });
         return handleResponse(response);
     },
+
+    // --- KULLANICININ BU MEDYA İÇİN PUANI ---
+    getUserRatingForMedia: async (mediaItemId: number): Promise<RatingDTO | null> => {
+        const response = await fetch(
+            `${API_BASE_URL}/Rating/user/${mediaItemId}`,
+            { method: "GET", headers: getAuthHeaders() }
+        );
+
+        if (response.status === 404) return null; // Kullanıcı puan vermemiş
+
+        return handleResponse(response);
+    },
+
+
+    // --- KULLANICININ BU MEDYA İÇİN İNCELEMESİ ---
+    getUserReviewForMedia: async (mediaItemId: number): Promise<ReviewDTO | null> => {
+        const response = await fetch(
+            `${API_BASE_URL}/Review/user/${mediaItemId}`,
+            { method: "GET", headers: getAuthHeaders() }
+        );
+
+        if (response.status === 404) return null; // Kullanıcı yorum yapmamış
+
+        return handleResponse(response);
+    },
+
+
+
 };
