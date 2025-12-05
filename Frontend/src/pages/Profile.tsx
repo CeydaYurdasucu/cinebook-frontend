@@ -219,6 +219,8 @@ export default function Profile() {
     };
     // --- TAKİP İŞLEMİ ---
     const handleFollowToggle = async () => {
+        console.log("TAKİP EDİLEN USER ID:", user.id);
+
         if (!currentUserId) {
             toast.error("Giriş yapmalısınız.");
             return;
@@ -541,7 +543,7 @@ export default function Profile() {
                         {customLists.length > 0 ? (
                             customLists.map((list, idx) => (
                                 <div
-                                    key={`${list.id}-${idx}`}
+                                    key={list.id || idx}
                                     className="relative bg-[#0A1A2F]/70 hover:bg-[#0A1A2F]/80 backdrop-blur-lg 
           rounded-3xl p-6 border border-[#0A1A2F] hover:border-[#3DD9B4]/30 transition-all"
                                 >
@@ -647,7 +649,7 @@ export default function Profile() {
 
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-6">
                             {watchedMovies.map((item, idx) => (
-                                <ContentCard key={`${item.id}-${idx}`} item={item} type="movie" />
+                                <ContentCard key={idx} item={item} type="movie" />
                             ))}
                         </div>
                     </>
@@ -671,7 +673,7 @@ export default function Profile() {
 
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-6">
                             {watchlistMovies.map((item, idx) => (
-                                <ContentCard key={`${item.id}-${idx}`} item={item} type="movie" />
+                                <ContentCard key={idx} item={item} type="movie" />
                             ))}
                         </div>
                     </>
@@ -696,7 +698,7 @@ export default function Profile() {
 
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-6">
                             {readBooks.map((item, idx) => (
-                                <ContentCard key={`${item.id}-${idx}`} item={item} type="book" />
+                                <ContentCard key={idx} item={item} type="book" />
                             ))}
                         </div>
                     </>
@@ -721,7 +723,7 @@ export default function Profile() {
 
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 gap-6">
                             {toreadBooks.map((item, idx) => (
-                                <ContentCard key={`${item.id}-${idx}`} item={item} type="book" />
+                                <ContentCard key={idx} item={item} type="book" />
                             ))}
                         </div>
                     </>
@@ -735,7 +737,7 @@ export default function Profile() {
                     <div className="max-w-3xl space-y-6">
                         {userActivities.map((activity) => (
                             <div
-                                key={`${activity.activityId}-${activity.createdAt}`} 
+                                key={activity.activityId}
                                 className="bg-gradient-to-br from-[#0A1A2F]/70 to-[#0A1A2F]/40 
           backdrop-blur-lg rounded-3xl p-6 border border-[#0A1A2F]"
                             >

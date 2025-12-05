@@ -1,193 +1,286 @@
-
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Heart, MessageCircle, Star, Send, User } from "lucide-react";
+import {
+    Heart,
+    MessageCircle,
+    Star,
+    Send,
+    Loader2,
+    AlertTriangle,
+} from "lucide-react";
+import { api } from "../services/api";
 
-interface ActivityCardProps {
-    activity: {
-        id: string;
-        user: {
-            id: string;
-            username: string;
-            displayName: string;
-            avatar: string;
-        };
-        action: string;
-        content: {
-            id: string;
-            type: string;
-            title: string;
-            poster: string;
-        };
-        rating?: number;
-        timestamp: string;
-        review?: string;
-        likes: number;
-        comments: number;
-    };
-}
+export default function ActivityCard({ activity }: { activity: any }) {
+    // --- GÜVENLİ VERİ OKUMA (Fail-Safe Logic) ---
+    console.log("ACTIVITY:", activity);
 
-export default function ActivityCard({ activity }: ActivityCardProps) {
+    // 1. ID KONTROLÜ
+    const safeId = activity?.activityId ?? activity?.id;
+
+    // 2. TYPE KONTROLÜ
+    let safeType = activity?.type ?? activity?.Type;
+    if (!safeType) {
+        safeType =
+            activity?.ratingScore > 0 || activity?.rating > 0 ? "Rating" : "Review";
+    }
+
+    // 3. SAYISAL DEĞERLER
+    const likeCount = Number(activity?.likeCount ?? activity?.likes ?? 0);
+    const [commentTotal, setCommentTotal] = useState(activity?.comments ?? 0);
+
+    const ratingScore = Number(activity?.ratingScore ?? activity?.rating ?? 0);
+
+    // 4. METİN VE OBJELER
+    const user = activity?.user || {};
+    const content = activity?.content || {};
+
+    const username = user.username ?? user.displayName ?? "Kullanıcı";
+    const avatarUrl =
+        user.avatarUrl ?? user.avatar ?? "https://via.placeholder.com/150";
+    const contentId = content.contentId ?? content.id;
+    const contentTitle = content.title ?? "İsimsiz İçerik";
+    const posterUrl =
+        content.posterUrl ?? content.poster ?? "https://via.placeholder.com/150";
+    const actionText =
+        activity?.actionText ?? activity?.action ?? "bir işlem yaptı";
+    const [comments, setComments] = useState<any[]>([]);
+    const [loadingComments, setLoadingComments] = useState(false);
+
+    // Tarih formatlama
+    let displayDate = "";
+    try {
+        const dateStr =
+            activity?.createdAt ?? activity?.timestamp ?? new Date().toISOString();
+        displayDate = new Date(dateStr).toLocaleDateString("tr-TR", {
+            day: "numeric",
+            month: "long",
+            hour: "2-digit",
+            minute: "2-digit",
+        });
+    } catch (e) {
+        displayDate = "Tarih yok";
+    }
+
+    // --- LOCAL STORAGE KEY ---
+    // Her aktivite için benzersiz bir anahtar oluşturuyoruz
+    const storageKey = `liked_status_${safeId}`;
+
     // --- STATE ---
-    const [showFullReview, setShowFullReview] = useState(false);
-    const [likes, setLikes] = useState(activity.likes);
-    const [isLiked, setIsLiked] = useState(false);
+    const [likes, setLikes] = useState(likeCount);
 
-    // Yorum Alanı
+    // BAŞLANGIÇ DURUMU (ÖNEMLİ GÜNCELLEME):
+    // Sayfa yüklendiğinde önce LocalStorage'a bak (Tarayıcı hafızası),
+    // Eğer orada kayıt yoksa Backend'den gelen veriyi kullan.
+    const [isLiked, setIsLiked] = useState(() => {
+        const storedValue = localStorage.getItem(storageKey);
+        if (storedValue !== null) {
+            return storedValue === "true"; // Hafızada "true" ise true dön
+        }
+        // Hafızada yoksa Backend verisine güven (şimdilik false geliyor olsa bile)
+        return !!(activity?.isLikedByCurrentUser ?? activity?.isLiked);
+    });
+
     const [showComments, setShowComments] = useState(false);
-    const [commentText, setCommentText] = useState("");
     const [localComments, setLocalComments] = useState<string[]>([]);
+    const [commentText, setCommentText] = useState("");
+    const [isSendingComment, setIsSendingComment] = useState(false);
+    const loadComments = async () => {
+        if (!safeId) return;
 
-    // --- ÇEVİRİLER ---
-    const translateAction = (action: string) => {
-        const map: Record<string, string> = {
-            "rated a movie": "bir filmi puanladı",
-            "rated a book": "bir kitabı puanladı",
-            "reviewed a book": "bir kitabı inceledi",
-            "reviewed a movie": "bir filmi inceledi",
-            "added to watchlist": "izleme listesine ekledi",
-            "added to custom list": "özel listeye ekledi",
-        };
-        return map[action] || action;
-    };
+        setLoadingComments(true);
+        try {
+            const data = await api.getComments(safeId, safeType);
+            setComments(data);
 
-    const translateTime = (time: string) => {
-        return time
-            .replace("hours ago", "saat önce")
-            .replace("hour ago", "saat önce")
-            .replace("days ago", "gün önce")
-            .replace("day ago", "gün önce")
-            .replace("Just now", "Az önce");
+            // ⭐ En doğru sayıyı güncelle
+            setCommentTotal(data.length);
+        } catch (err) {
+            console.error("Yorumlar yüklenemedi:", err);
+        } finally {
+            setLoadingComments(false);
+        }
     };
+    useEffect(() => {
+        setCommentTotal(activity?.comments ?? 0);
+    }, [activity]);
+
+    useEffect(() => {
+        if (showComments) loadComments();
+    }, [showComments]);
+    // --- SENKRONİZASYON ---
+    // Backend'den veri güncellenirse ve LocalStorage boşsa state'i güncelle
+    useEffect(() => {
+        const backendState = !!(
+            activity?.isLikedByCurrentUser ?? activity?.isLiked
+        );
+        // Sadece LocalStorage'da veri YOKSA backend'i dinle
+        // (Böylece backend 'false' gönderse bile bizim 'true' kaydımız bozulmaz)
+        if (localStorage.getItem(storageKey) === null) {
+            setIsLiked(backendState);
+        }
+    }, [activity?.isLikedByCurrentUser, activity?.isLiked, safeId, storageKey]);
 
     // --- AKSİYONLAR ---
-    const handleLike = () => {
-        if (isLiked) {
-            setLikes(likes - 1);
-        } else {
-            setLikes(likes + 1);
+    const handleLike = async () => {
+        if (!safeId) {
+            console.warn("Like işlemi iptal edildi: ID bulunamadı.", activity);
+            return;
         }
-        setIsLiked(!isLiked);
+
+        const previousLikes = likes;
+        const previousIsLiked = isLiked;
+
+        // Yeni durumu hesapla
+        const newIsLiked = !isLiked;
+
+        // 1. UI Güncelle (Anında Tepki)
+        setIsLiked(newIsLiked);
+        setLikes(newIsLiked ? likes + 1 : likes - 1);
+
+        // 2. Tarayıcı Hafızasına Kaydet (Sayfa yenilenince hatırlasın diye)
+        localStorage.setItem(storageKey, String(newIsLiked));
+
+        // 3. API İsteği Gönder
+        try {
+            await api.toggleLike(safeId, safeType);
+        } catch (error) {
+            console.error("Beğeni hatası:", error);
+            // Hata olursa her şeyi geri al
+            setIsLiked(previousIsLiked);
+            setLikes(previousLikes);
+            localStorage.setItem(storageKey, String(previousIsLiked));
+        }
     };
 
-    const handleSubmitComment = (e: React.FormEvent) => {
+    const handleSubmitComment = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (commentText.trim()) {
+        if (!commentText.trim()) return;
+
+        if (!safeId) {
+            alert("Hata: İçerik ID'si yüklenemediği için yorum yapılamıyor.");
+            return;
+        }
+
+        setIsSendingComment(true);
+        try {
+            await api.postComment(safeId, commentText, safeType);
+
             setLocalComments([...localComments, commentText]);
             setCommentText("");
+        } catch (error) {
+            console.error("Yorum gönderilemedi:", error);
+        } finally {
+            setIsSendingComment(false);
         }
     };
 
-    const truncateReview = (text: string, maxLength: number) => {
-        if (text.length <= maxLength) return text;
-        return text.slice(0, maxLength) + "...";
-    };
+    // --- RENDER ---
+    if (!activity) return null;
 
     return (
-        <div className="bg-[#0A1A2F]/50 backdrop-blur-sm rounded-3xl p-6 border border-[#0A1A2F] hover:border-[#3DD9B4]/30 transition-all shadow-lg">
-            {/* Kullanıcı Bilgisi */}
+        <div className="bg-[#0A1A2F]/50 backdrop-blur-sm rounded-3xl p-6 border border-[#0A1A2F] hover:border-[#3DD9B4]/30 transition-all shadow-lg mb-6">
+            {/* Üst Kısım: Avatar ve İsim */}
             <div className="flex items-center gap-3 mb-4">
-                <Link to={`/profile/${activity.user.username}`}>
+                <Link to={`/profile/${username}`}>
                     <img
-                        src={activity.user.avatar}
-                        alt={activity.user.displayName}
-                        className="w-12 h-12 rounded-full object-cover border-2 border-[#3DD9B4]/20"
+                        src={avatarUrl}
+                        alt={username}
+                        className="w-12 h-12 rounded-full border border-[#3DD9B4]/20 object-cover"
                     />
                 </Link>
-                <div className="flex-1">
+                <div>
                     <div className="flex items-center gap-2">
-                        <Link to={`/profile/${activity.user.username}`} className="text-white hover:text-[#3DD9B4] transition-colors font-medium">
-                            {activity.user.displayName}
+                        <Link
+                            to={`/profile/${username}`}
+                            className="text-white font-medium hover:text-[#3DD9B4] transition-colors"
+                        >
+                            {username}
                         </Link>
-                        <span className="text-gray-500 text-xs">• {translateTime(activity.timestamp)}</span>
+                        <span className="text-gray-500 text-xs">• {displayDate}</span>
                     </div>
-                    <p className="text-sm text-gray-400">{translateAction(activity.action)}</p>
+                    <div className="text-gray-400 text-sm">{actionText}</div>
                 </div>
             </div>
 
-            {/* İçerik Kartı */}
-            <Link to={`/content/${activity.content.id}`}>
+            {/* İçerik Kısımı */}
+            <Link to={contentId ? `/content/${contentId}` : "#"}>
                 <div className="flex gap-4 mb-4 group">
                     <img
-                        src={activity.content.poster}
-                        alt={activity.content.title}
+                        src={posterUrl}
+                        alt={contentTitle}
                         className="w-24 h-36 rounded-xl object-cover shadow-lg group-hover:scale-105 transition-transform duration-300"
                     />
                     <div className="flex-1">
-                        <h4 className="text-white font-medium mb-2 group-hover:text-[#3DD9B4] transition-colors">{activity.content.title}</h4>
-                        {activity.rating && (
-                            <div className="flex items-center gap-2 mb-3">
-                                <div className="flex items-center gap-1 px-2 py-1 bg-[#3DD9B4]/10 rounded-lg border border-[#3DD9B4]/20">
-                                    <Star className="w-3.5 h-3.5 text-[#FFD65A] fill-[#FFD65A]" />
-                                    <span className="text-[#FFD65A] text-sm font-bold">{activity.rating}/10</span>
-                                </div>
+                        <h3 className="text-white font-medium text-lg group-hover:text-[#3DD9B4] transition-colors">
+                            {contentTitle}
+                        </h3>
+
+                        {ratingScore > 0 && (
+                            <div className="flex items-center gap-1 bg-[#3DD9B4]/10 w-fit px-2 py-1 rounded-lg mt-2 border border-[#3DD9B4]/20">
+                                <Star size={14} className="text-[#FFD65A] fill-[#FFD65A]" />
+                                <span className="text-[#FFD65A] font-bold text-sm">
+                                    {ratingScore}/10
+                                </span>
                             </div>
                         )}
-                        {activity.review && (
-                            <p className="text-gray-300 text-sm leading-relaxed">
-                                {showFullReview ? activity.review : truncateReview(activity.review, 120)}
-                                {activity.review.length > 120 && (
-                                    <button
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            setShowFullReview(!showFullReview);
-                                        }}
-                                        className="text-[#3DD9B4] ml-2 hover:text-[#2FC9A4] transition-colors text-xs"
-                                    >
-                                        {showFullReview ? "Küçült" : "Devamını oku"}
-                                    </button>
-                                )}
+
+                        {(activity.reviewExcerpt || activity.review) && (
+                            <p className="text-gray-300 text-sm mt-3 line-clamp-3 leading-relaxed">
+                                {activity.reviewExcerpt || activity.review}
                             </p>
                         )}
                     </div>
                 </div>
             </Link>
 
-            {/* Butonlar */}
+            {/* Alt Butonlar */}
             <div className="flex items-center gap-6 pt-4 border-t border-[#0A1A2F]">
-
-                {/* --- KALP BUTONU (DÜZELTİLEN KISIM) --- */}
                 <button
                     onClick={handleLike}
-                    className={`flex items-center gap-2 transition-all group ${isLiked ? "text-red-500" : "text-gray-400 hover:text-red-500"
+                    className={`flex items-center gap-2 transition-all ${isLiked ? "text-red-500" : "text-gray-400 hover:text-red-500"
                         }`}
                 >
                     <Heart
-                        // BURASI DÜZELTİLDİ: currentColor yerine direkt Kırmızı Renk Kodu (#ef4444) verildi.
-                        fill={isLiked ? "#ef4444" : "none"}
-                        className={`w-5 h-5 transition-transform duration-200 ${isLiked ? "scale-110" : "group-hover:scale-110"
-                            }`}
+                        size={20}
+                        fill={isLiked ? "currentColor" : "none"}
+                        className={isLiked ? "scale-110" : ""}
                     />
-                    <span className="text-sm font-medium">{likes}</span>
+                    <span className="font-medium">{likes}</span>
                 </button>
 
-                {/* Yorum Butonu */}
                 <button
                     onClick={() => setShowComments(!showComments)}
-                    className={`flex items-center gap-2 transition-colors group ${showComments ? "text-[#3DD9B4]" : "text-gray-400 hover:text-[#3DD9B4]"
+                    className={`flex items-center gap-2 transition-all ${showComments
+                            ? "text-[#3DD9B4]"
+                            : "text-gray-400 hover:text-[#3DD9B4]"
                         }`}
                 >
-                    <MessageCircle className="w-5 h-5 group-hover:scale-110 transition-transform duration-200" />
-                    <span className="text-sm font-medium">{activity.comments + localComments.length}</span>
+                    <MessageCircle size={20} />
+                    <span className="font-medium">
+                        {commentTotal + localComments.length}
+                    </span>
                 </button>
             </div>
 
-            {/* Yorum Alanı */}
+            {/* Yorum Yapma Alanı */}
             {showComments && (
                 <div className="mt-4 pt-4 border-t border-[#0A1A2F] animate-in fade-in slide-in-from-top-2">
                     <div className="space-y-3 mb-4 max-h-60 overflow-y-auto custom-scrollbar">
-                        {/* Örnek Yorum */}
-                        <div className="flex gap-2">
-                            <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center flex-shrink-0">
-                                <User className="w-4 h-4 text-gray-400" />
+                        {/* 🔥 1) Backend'den gelen yorumlar */}
+                        {comments.map((c: any) => (
+                            <div key={c.id} className="flex gap-2">
+                                <img
+                                    src={c.avatarUrl ?? "https://via.placeholder.com/50"}
+                                    className="w-8 h-8 rounded-full"
+                                />
+                                <div className="flex-1 bg-[#0A1A2F] rounded-xl p-3 border border-[#3DD9B4]/20">
+                                    <p className="text-white text-sm font-medium">{c.username}</p>
+                                    <p className="text-gray-300 text-xs">{c.commentText}</p>
+                                </div>
                             </div>
-                            <div className="flex-1 bg-[#0A1A2F] rounded-xl p-3">
-                                <p className="text-white text-sm font-medium mb-1">FilmGuru23</p>
-                                <p className="text-gray-400 text-xs">Bu filme bayılmıştım, kesinlikle katılıyorum!</p>
-                            </div>
-                        </div>
+                        ))}
 
-                        {/* Kullanıcı Yorumları */}
+                        {/* 🔥 2) Yeni eklenen local yorumlar */}
                         {localComments.map((comment, idx) => (
                             <div key={idx} className="flex gap-2">
                                 <div className="w-8 h-8 rounded-full bg-[#3DD9B4]/20 flex items-center justify-center flex-shrink-0">
@@ -203,18 +296,21 @@ export default function ActivityCard({ activity }: ActivityCardProps) {
 
                     <form onSubmit={handleSubmitComment} className="flex gap-2">
                         <input
-                            type="text"
+                            className="flex-1 bg-[#050B12] text-white p-2.5 rounded-xl border border-gray-700 focus:border-[#3DD9B4] focus:outline-none transition-colors text-sm"
                             placeholder="Bir yorum yaz..."
                             value={commentText}
                             onChange={(e) => setCommentText(e.target.value)}
-                            className="flex-1 bg-[#0A1A2F] border border-gray-700 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-[#3DD9B4] transition-colors placeholder-gray-600"
                         />
                         <button
                             type="submit"
-                            disabled={!commentText.trim()}
-                            className="p-2 bg-[#3DD9B4] text-[#050B12] rounded-xl hover:bg-[#2FC9A4] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            disabled={isSendingComment || !commentText.trim()}
+                            className="bg-[#3DD9B4] px-4 rounded-xl text-[#050B12] hover:bg-[#2FC9A4] disabled:opacity-50 transition-colors flex items-center justify-center"
                         >
-                            <Send className="w-4 h-4" />
+                            {isSendingComment ? (
+                                <Loader2 size={18} className="animate-spin" />
+                            ) : (
+                                <Send size={18} />
+                            )}
                         </button>
                     </form>
                 </div>

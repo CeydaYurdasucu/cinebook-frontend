@@ -137,6 +137,17 @@ export const api = {
         return handleResponse(response);
     },
 
+    forgotPassword: async (email: string): Promise<any> => {
+        const response = await fetch(`${API_BASE_URL}/User/forgot-password`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email }),
+        });
+
+        return handleResponse(response);
+    },
+
+
     // --- USER PROFILE & EDIT ---
 
     // Genel profil çekme (Public)
@@ -425,30 +436,75 @@ export const api = {
     // --- SOCIAL (FOLLOW & ACTIVITY) ---
 
     followUser: async (followingId: number): Promise<UserFollowDTO> => {
-        const followDto = { followingId };
+        const followerId = getUserIdFromToken();
+        if (!followerId) throw new Error("İşlem için oturum açmalısınız.");
+
+        const followDto = { followingUserId: followingId };
+
         const response = await fetch(`${API_BASE_URL}/UserFollow`, {
             method: "POST",
             headers: getAuthHeaders(),
             body: JSON.stringify(followDto),
         });
+
         return handleResponse(response);
     },
 
-    unfollowUser: async (followId: number): Promise<void> => {
-        const response = await fetch(`${API_BASE_URL}/UserFollow/${followId}`, {
-            method: "DELETE",
-            headers: getAuthHeaders(),
-        });
+    unfollowUser: async (followingUserId: number): Promise<void> => {
+        const response = await fetch(
+            `${API_BASE_URL}/UserFollow/unfollow/${followingUserId}`,
+            {
+                method: "DELETE",
+                headers: getAuthHeaders(),
+            }
+        );
+
         return handleResponse(response);
     },
 
+
+    // services/api.ts içinde GÜNCELLE
+
+    // AKTİVİTE AKIŞI (Feed)
     getFeed: async (page: number = 1): Promise<any[]> => {
-        const mockFallback = mockActivities.map(a => ({ ...a, id: `${a.id}-${Math.random()}` }));
-        const response = await fetch(`${API_BASE_URL}/Activity?page=${page}`, {
+        const mockFallback = mockActivities.map((a) => ({
+            ...a,
+            id: `${a.id}-${Math.random()}`,
+        }));
+
+        const response = await fetch(`${API_BASE_URL}/Timeline?page=${page}`, {
             method: "GET",
             headers: getAuthHeaders(),
         });
-        return handleResponse(response, mockFallback);
+
+        const raw = await handleResponse(response, mockFallback);
+
+        const formatted = raw.map((a: any) => ({
+            id: a.activityId,
+            user: {
+                id: a.user.userId,
+                username: a.user.username,
+                displayName: a.user.username,
+                avatar: a.user.avatarUrl,
+            },
+            action: a.actionText,
+            content: {
+                id: a.content.contentId,
+                type: a.content.category,
+                title: a.content.title,
+                poster: a.content.posterUrl,
+            },
+            rating: a.ratingScore,
+            review: a.reviewExcerpt,
+            likes: a.likeCount,
+
+            // ⭐ DOĞRU ALAN
+            comments: a.commentCount ?? 0,
+
+            timestamp: a.createdAt,
+        }));
+
+        return formatted;
     },
 
     addLike: async (ratingId: number | null, reviewId: number | null): Promise<ActivityLikeDTO> => {
@@ -535,5 +591,115 @@ export const api = {
             headers: getAuthHeaders(),
         });
         return handleResponse(response);
-    }
+    },
+
+    toggleLike: async (activityId: number, type: string) => {
+        const response = await fetch(
+            `${API_BASE_URL}/Timeline/${activityId}/like?type=${type}`,
+            {
+                method: "POST",
+                headers: {
+                    ...getAuthHeaders(),
+                    "Content-Type": "application/json",
+                },
+            }
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("Like Hatası:", errorText);
+            throw new Error("Beğeni işlemi başarısız");
+        }
+
+        return response.json();
+    },
+
+    // services/api.ts içine ekle/değiştir
+
+    // ActivityCard tarafından kullanılan: Yorum gönderir
+    postComment: async (
+        activityId: number | string,
+        text: string,
+        type: string
+    ) => {
+        const numericId = Number(activityId);
+
+        // Review mi Rating mi olduğunu güvenle belirliyoruz
+        const isReview = type === "Review";
+        const isRating = type === "Rating";
+
+        // Geçersiz tip durumunda engelle
+        if (!isReview && !isRating) {
+            throw new Error("Geçersiz aktivite tipi: Review veya Rating olmalı.");
+        }
+
+        const response = await fetch(`${API_BASE_URL}/ActivityComment`, {
+            method: "POST",
+            headers: {
+                ...getAuthHeaders(),
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                ReviewId: isReview ? numericId : null,
+                RatingId: isRating ? numericId : null,
+                CommentText: text,
+            }),
+        });
+
+        // --- HATA YAKALAMA ---
+        if (!response.ok) {
+            let errorMessage = "Yorum gönderilemedi";
+
+            try {
+                // Backend JSON döndürüyorsa parse edelim
+                const errorBody = await response.json();
+
+                if (errorBody?.error) {
+                    errorMessage = errorBody.error;
+                } else if (response.status === 400 && errorBody?.errors) {
+                    // ModelState Errors
+                    errorMessage =
+                        "Giriş hatası: " + Object.values(errorBody.errors).flat().join(" ");
+                } else if (response.status === 500) {
+                    errorMessage = "Sunucu hatası (500). Backend loglarını kontrol edin.";
+                }
+            } catch (err) {
+                const errorText = await response.text();
+                errorMessage = `${errorMessage} — Sunucu yanıtı: ${errorText}`;
+            }
+
+            throw new Error(errorMessage);
+        }
+
+        return response.json();
+    },
+
+
+    // services/api.ts içine ekle
+
+    // ActivityCard tarafından kullanılan: Yorumları getirir
+    // Bir aktivitenin tüm yorumlarını getirir.
+    // Hem Review hem Rating için çalışır.
+    getComments: async (activityId: number | string, type: string) => {
+        const numericId = Number(activityId);
+
+        const response = await fetch(
+            `${API_BASE_URL}/Timeline/${numericId}/comments?type=${type}`,
+            {
+                method: "GET",
+                headers: {
+                    ...getAuthHeaders(),
+                },
+            }
+        );
+
+        // ❗ HATA YAKALAMA — body'yi SADECE 1 KEZ oku
+        if (!response.ok) {
+            const errorText = await response.text(); // 🔥 Sadece 1 defa oku
+            throw new Error("Yorumlar getirilemedi: " + errorText);
+        }
+
+        // ❗ Burada JSON güvenle okunabilir
+        return response.json();
+    },
 };
