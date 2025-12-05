@@ -10,6 +10,7 @@ import Profile from "../pages/Profile";
 import EditProfile from "../pages/EditProfile";
 
 import RequireAuth from "../components/RequireAuth";
+import ListDetail from "../pages/ListDetail";
 
 export const router = createBrowserRouter([
     { path: "/login", element: <Login /> },
@@ -27,6 +28,7 @@ export const router = createBrowserRouter([
                     { path: "content/:id", element: <ContentDetail /> },
                     { path: "profile/:username", element: <Profile /> },
                     { path: "profile/:username/edit", element: <EditProfile /> },
+                    { path: "list/:id", element: <ListDetail /> },
                 ],
             },
         ],

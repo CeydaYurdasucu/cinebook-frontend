@@ -1,9 +1,7 @@
 ﻿import { mockActivities, mockContent, mockUsers } from "../utils/mockData";
 import { toast } from "sonner";
 
-
-
-// Backend'den beklenen DTO'lar için Typescript tipleri (Varsayımsal olarak tanımlandı)
+// Backend'den beklenen DTO'lar için Typescript tipleri
 interface UserDTO { id: number; username: string; email: string; bio?: string; }
 interface ReviewDTO { id: number; content: string; mediaItemId: number; userId: number; }
 interface RatingDTO { id: number; score: number; mediaItemId: number; userId: number; }
@@ -14,10 +12,9 @@ interface UserFollowDTO { id: number; followerId: number; followingId: number; }
 interface ActivityCommentDTO { id: number; commentText: string; userId: number; }
 interface ActivityLikeDTO { id: number; userId: number; }
 
-
 const API_BASE_URL: string = (import.meta as any).env.VITE_API_BASE_URL || "https://localhost:7255/api";
 
-// JWT Payload'unu Base64 decode ederek ID'yi çözmeye yarayan basit fonksiyon
+// JWT Payload'unu Base64 decode ederek ID'yi çözmeye yarayan fonksiyon
 const decodeJwt = (token: string) => {
     try {
         const base64Url = token.split('.')[1];
@@ -27,8 +24,12 @@ const decodeJwt = (token: string) => {
         }).join(''));
 
         const payload = JSON.parse(jsonPayload);
-        const userId = payload.sub || payload.nameid;
-        const username = payload.unique_name || payload.name;
+        // .NET Identity genellikle kullanıcı adını bu uzun anahtarla saklar:
+        const nameKey = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name";
+        const idKey = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier";
+
+        const userId = payload[idKey] || payload.nameid || payload.sub;
+        const username = payload[nameKey] || payload.unique_name || payload.name;
 
         return { id: parseInt(String(userId), 10), username: String(username) };
     } catch (e) {
@@ -67,9 +68,11 @@ async function handleResponse(response: Response, mockFallback: any = null) {
             return mockFallback;
         }
 
-        throw new Error(errorMsg as string);
+        // Hata mesajını düzgün fırlat
+        if (typeof data === 'string') throw new Error(data);
+        if (typeof errorMsg === 'string') throw new Error(errorMsg);
+        throw new Error(JSON.stringify(errorMsg));
     }
-    // Eğer 204 No Content ise ve data boşsa (genelde DELETE için), boş obje döndür.
     if (response.status === 204) return {};
     return data;
 }
@@ -83,15 +86,10 @@ const getUserIdFromToken = (): number | null => {
     return userPayload && !isNaN(userPayload.id) ? userPayload.id : null;
 };
 
-
-
-
 export const api = {
 
-
-    // AddUserDTO (Kayıt)
+    // --- AUTH ---
     register: async (username: string, email: string, password: string, bio: string = "", profilePictureUrl: string | null = null): Promise<UserDTO> => {
-        // AddUserDTO'da UserId yok, BE token'dan çözer.
         const registerDto = { username, email, password, bio, profilePictureUrl };
         const response = await fetch(`${API_BASE_URL}/User`, {
             method: "POST",
@@ -101,10 +99,8 @@ export const api = {
         return handleResponse(response);
     },
 
-    //deneme 
     login: async (username: string, password: string): Promise<{ token: string }> => {
         const loginDto = { username, password };
-
         const response = await fetch(`${API_BASE_URL}/User/login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -113,35 +109,37 @@ export const api = {
 
         const data = await handleResponse(response);
 
-        console.log("LOGIN RESPONSE DATA:", data);
-
         if (!data || typeof data !== "object" || typeof (data as any).token !== "string") {
             throw new Error("Login yanıtında token bulunamadı.");
         }
 
         const token = (data as any).token;
-
-        // TOKEN'I LOCALSTORAGE'A YAZ
         localStorage.setItem("authToken", token);
+
+        // Token içinden ID ve Username'i alıp storage'a atalım (Kolay erişim için)
+        const userInfo = decodeJwt(token);
+        if (userInfo) {
+            if (userInfo.id) localStorage.setItem("userId", userInfo.id.toString());
+            if (userInfo.username) localStorage.setItem("username", userInfo.username);
+        }
 
         return { token };
     },
 
-
-
-    // Logout
     logout: async (): Promise<void> => {
         localStorage.removeItem("authToken");
-        // Logout uç noktası: POST /api/User/logout
+        localStorage.removeItem("userId");
+        localStorage.removeItem("username");
         const response = await fetch(`${API_BASE_URL}/User/logout`, {
             method: "POST",
             headers: getAuthHeaders(),
         });
-        // Sadece başarılı yanıt bekler, içerik beklemez.
         return handleResponse(response);
     },
 
-    // Profil Çekme
+    // --- USER PROFILE & EDIT ---
+
+    // Genel profil çekme (Public)
     getUserProfile: async (id: number): Promise<UserDTO> => {
         const mockFallback = mockUsers.find((u: any) => String(u.id) === String(id)) || null;
         const response = await fetch(`${API_BASE_URL}/User/${id}`, {
@@ -151,34 +149,124 @@ export const api = {
         return handleResponse(response, mockFallback);
     },
 
-    // Harici API Arama (Internal DB)
-    /*search: async (query: string): Promise<any[]> => {
-        const mockFallback = mockContent.filter(c => c.title.toLowerCase().includes(query.toLowerCase()));
-        const response = await fetch(`${API_BASE_URL}/MediaItem?query=${encodeURIComponent(query)}`, {
+    // EditProfile.tsx için gerekli (get)
+    getUser: async (id: number) => {
+        const response = await fetch(`${API_BASE_URL}/User/${id}`, {
             method: "GET",
+            headers: getAuthHeaders(),
         });
-        return handleResponse(response, mockFallback);
-    },*/
+        return handleResponse(response);
+    },
 
-    // Tüm MediaItem listesini backend'den çek ve FRONTEND tarafında filtrele
-    search: async (query: string): Promise<any[]> => {
-        // 1) Backend’den tüm medya verilerini çek
+    // EditProfile.tsx için gerekli (update)
+    updateUser: async (id: number, userData: any) => {
+        const response = await fetch(`${API_BASE_URL}/User/${id}`, {
+            method: "PUT",
+            headers: getAuthHeaders(),
+            body: JSON.stringify(userData),
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText);
+        }
+        return true;
+    },
+
+    // Profile.tsx routing için gerekli
+    getUserByUsername: async (username: string): Promise<any> => {
+        const response = await fetch(`${API_BASE_URL}/User/by-username/${username}`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+        return handleResponse(response);
+    },
+
+    // Profile.tsx -> Özel listeler sekmesi için
+    getUserCustomLists: async (userId: number): Promise<any[]> => {
+        const response = await fetch(`${API_BASE_URL}/CustomList/user/${userId}`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+        return handleResponse(response);
+    },
+
+    // Profile.tsx -> İzlediklerim, Okuduklarım sekmeleri için
+    getUserLibrary: async (userId: number, status?: number): Promise<any[]> => {
+        // status parametresi varsa query string olarak ekle
+        const url = status
+            ? `${API_BASE_URL}/LibraryEntry/user/${userId}?status=${status}`
+            : `${API_BASE_URL}/LibraryEntry/user/${userId}`;
+
+        const response = await fetch(url, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+        return handleResponse(response);
+    },
+
+    // Profile.tsx -> Son aktiviteler için
+    getUserActivities: async (userId: number): Promise<any[]> => {
+        const response = await fetch(`${API_BASE_URL}/Timeline/user/${userId}`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+        return handleResponse(response);
+    },
+
+    // --- LIST DETAILS ---
+
+    getCustomList: async (listId: string | number) => {
+        const response = await fetch(`${API_BASE_URL}/CustomList/${listId}`, {
+            method: "GET",
+            headers: getAuthHeaders()
+        });
+        return handleResponse(response);
+    },
+
+    getCustomListItems: async (listId: string | number) => {
+        const response = await fetch(`${API_BASE_URL}/CustomListItem/list/${listId}`, {
+            method: "GET",
+            headers: getAuthHeaders()
+        });
+        return handleResponse(response);
+    },
+
+    // ListDetail.tsx'deki "addMediaToCustomList" çağrısı için
+    addMediaToCustomList: async (listId: string | number, mediaItemId: number): Promise<any> => {
+        // Backend'de bu işlem CustomListItem POST isteği ile yapılır
+        // Ancak ListDetail.tsx bunu bekliyor, o yüzden wrapper yazıyoruz.
+        const itemDto = { customListId: Number(listId), mediaItemId };
+        const response = await fetch(`${API_BASE_URL}/CustomListItem`, {
+            method: "POST",
+            headers: getAuthHeaders(),
+            body: JSON.stringify(itemDto),
+        });
+        return handleResponse(response);
+    },
+
+    // --- MEDIA ---
+
+    // Arama modalları için tüm medyayı çekme (Profile ve ListDetail)
+    getAllMediaItems: async (): Promise<any[]> => {
         const response = await fetch(`${API_BASE_URL}/MediaItem`, {
             method: "GET",
             headers: getAuthHeaders(),
         });
-
-        const allItems = await response.json();
-
-        // 2) Frontend içinde filtrele
-        const filtered = allItems.filter((item: any) =>
-            item.title.toLowerCase().includes(query.toLowerCase())
-        );
-
-        return filtered;
+        return handleResponse(response);
     },
 
-    //cntent detail için 
+    // Frontend Search (Search.tsx)
+    search: async (query: string): Promise<any[]> => {
+        const response = await fetch(`${API_BASE_URL}/MediaItem`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+        const allItems = await response.json();
+        return allItems.filter((item: any) =>
+            item.title.toLowerCase().includes(query.toLowerCase())
+        );
+    },
+
     getMediaItemById: async (id: number): Promise<any> => {
         const response = await fetch(`${API_BASE_URL}/MediaItem/${id}`, {
             method: "GET",
@@ -187,23 +275,18 @@ export const api = {
         return handleResponse(response);
     },
 
-
     getTopRated: async () => {
         const response = await fetch(`${API_BASE_URL}/MediaItem`, {
             method: "GET",
             headers: getAuthHeaders(),
         });
-
         const allItems = await response.json();
-
         return allItems
             .filter((item: any) => item.averageRating != null)
             .sort((a: any, b: any) => b.averageRating - a.averageRating)
             .slice(0, 10);
     },
 
-
-    // Harici Medya Çekme (FetchMediaRequest DTO)
     fetchExternalMedia: async (externalId: string, mediaType: string): Promise<any> => {
         const requestDto = { externalId, mediaType };
         const response = await fetch(`${API_BASE_URL}/MediaItem/fetch`, {
@@ -214,94 +297,20 @@ export const api = {
         return handleResponse(response);
     },
 
-    // AKTİVİTE AKIŞI (Feed) - Backend'de eksik olan uç nokta
-    getFeed: async (page: number = 1): Promise<any[]> => {
-        const mockFallback = mockActivities.map(a => ({ ...a, id: `${a.id}-${Math.random()}` }));
-        const response = await fetch(`${API_BASE_URL}/Activity?page=${page}`, {
-            method: "GET",
-            headers: getAuthHeaders(),
-        });
-        return handleResponse(response, mockFallback); // BE açılana kadar Mock döner
-    },
+    // --- LIBRARY & RATINGS & REVIEWS ---
 
-    // 4. PUANLAMA (Rating) İŞLEMLERİ - AddRatingDTO
-    addRating: async (mediaItemId: number, score: number): Promise<RatingDTO> => {
-        const userId = getUserIdFromToken();
-        if (!userId) throw new Error("İşlem için oturum açmalısınız.");
-
-        // AddRatingDTO'ya göre: UserId BE'de token'dan çözülür.
-        const ratingDto = { mediaItemId, score };
-
-        const response = await fetch(`${API_BASE_URL}/Rating`, {
+    // Profile.tsx'deki "addToUserLibrary" çağrısı için wrapper
+    addToUserLibrary: async (mediaItemId: number, status: number) => {
+        const response = await fetch(`${API_BASE_URL}/LibraryEntry`, {
             method: "POST",
             headers: getAuthHeaders(),
-            body: JSON.stringify(ratingDto),
+            body: JSON.stringify({ mediaItemId, status }),
         });
         return handleResponse(response);
     },
 
-    // UpdateRatingDTO
-    updateRating: async (id: number, score: number): Promise<void> => {
-        const updateDto = { id, score };
-        const response = await fetch(`${API_BASE_URL}/Rating/${id}`, {
-            method: "PUT",
-            headers: getAuthHeaders(),
-            body: JSON.stringify(updateDto),
-        });
-        return handleResponse(response);
-    },
-
-    deleteRating: async (id: number): Promise<void> => {
-        const response = await fetch(`${API_BASE_URL}/Rating/${id}`, {
-            method: "DELETE",
-            headers: getAuthHeaders(),
-        });
-        return handleResponse(response);
-    },
-
-    // 5. İNCELEME (Review) İŞLEMLERİ - AddReviewDTO
-    addReview: async (mediaItemId: number, content: string): Promise<ReviewDTO> => {
-        const userId = getUserIdFromToken();
-        if (!userId) throw new Error("İşlem için oturum açmalısınız.");
-
-        // AddReviewDTO'ya göre: UserId BE'de token'dan çözülür.
-        const reviewDto = { mediaItemId, content };
-
-        const response = await fetch(`${API_BASE_URL}/Review`, {
-            method: "POST",
-            headers: getAuthHeaders(),
-            body: JSON.stringify(reviewDto),
-        });
-        return handleResponse(response);
-    },
-
-    // UpdateReviewDTO
-    updateReview: async (id: number, content: string): Promise<void> => {
-        const updateDto = { id, content };
-        const response = await fetch(`${API_BASE_URL}/Review/${id}`, {
-            method: "PUT",
-            headers: getAuthHeaders(),
-            body: JSON.stringify(updateDto),
-        });
-        return handleResponse(response);
-    },
-
-    deleteReview: async (id: number): Promise<void> => {
-        const response = await fetch(`${API_BASE_URL}/Review/${id}`, {
-            method: "DELETE",
-            headers: getAuthHeaders(),
-        });
-        return handleResponse(response);
-    },
-
-    // 6. KÜTÜPHANE GİRİŞİ (LibraryEntry) İŞLEMLERİ - AddLibraryEntryDTO
     addLibraryEntry: async (mediaItemId: number, status: number, completedDate: Date | null = null): Promise<LibraryEntryDTO> => {
-        const userId = getUserIdFromToken();
-        if (!userId) throw new Error("İşlem için oturum açmalısınız.");
-
-        // AddLibraryEntryDTO'ya göre: UserId BE'de token'dan çözülür.
         const entryDto = { mediaItemId, status, completedDate };
-
         const response = await fetch(`${API_BASE_URL}/LibraryEntry`, {
             method: "POST",
             headers: getAuthHeaders(),
@@ -310,7 +319,6 @@ export const api = {
         return handleResponse(response);
     },
 
-    // UpdateLibraryEntryDTO
     updateLibraryEntry: async (id: number, status: number, completedDate: Date | null = null): Promise<void> => {
         const updateDto = { id, status, completedDate };
         const response = await fetch(`${API_BASE_URL}/LibraryEntry/${id}`, {
@@ -329,14 +337,95 @@ export const api = {
         return handleResponse(response);
     },
 
+    // Ratings
+    addRating: async (mediaItemId: number, score: number): Promise<RatingDTO> => {
+        const ratingDto = { mediaItemId, score };
+        const response = await fetch(`${API_BASE_URL}/Rating`, {
+            method: "POST",
+            headers: getAuthHeaders(),
+            body: JSON.stringify(ratingDto),
+        });
+        return handleResponse(response);
+    },
+
+    updateRating: async (id: number, score: number): Promise<void> => {
+        const updateDto = { id, score };
+        const response = await fetch(`${API_BASE_URL}/Rating/${id}`, {
+            method: "PUT",
+            headers: getAuthHeaders(),
+            body: JSON.stringify(updateDto),
+        });
+        return handleResponse(response);
+    },
+
+    deleteRating: async (id: number): Promise<void> => {
+        const response = await fetch(`${API_BASE_URL}/Rating/${id}`, {
+            method: "DELETE",
+            headers: getAuthHeaders(),
+        });
+        return handleResponse(response);
+    },
+
+    getUserRatingForMedia: async (mediaItemId: number): Promise<RatingDTO | null> => {
+        const response = await fetch(`${API_BASE_URL}/Rating/user/${mediaItemId}`, {
+            method: "GET",
+            headers: getAuthHeaders()
+        });
+        if (response.status === 404) return null;
+        return handleResponse(response);
+    },
+
+    // Reviews
+    addReview: async (mediaItemId: number, content: string): Promise<ReviewDTO> => {
+        const reviewDto = { mediaItemId, content };
+        const response = await fetch(`${API_BASE_URL}/Review`, {
+            method: "POST",
+            headers: getAuthHeaders(),
+            body: JSON.stringify(reviewDto),
+        });
+        return handleResponse(response);
+    },
+
+    updateReview: async (id: number, content: string): Promise<void> => {
+        const updateDto = { id, content };
+        const response = await fetch(`${API_BASE_URL}/Review/${id}`, {
+            method: "PUT",
+            headers: getAuthHeaders(),
+            body: JSON.stringify(updateDto),
+        });
+        return handleResponse(response);
+    },
+
+    deleteReview: async (id: number): Promise<void> => {
+        const response = await fetch(`${API_BASE_URL}/Review/${id}`, {
+            method: "DELETE",
+            headers: getAuthHeaders(),
+        });
+        return handleResponse(response);
+    },
+
+    getUserReviewForMedia: async (mediaItemId: number): Promise<ReviewDTO | null> => {
+        const response = await fetch(`${API_BASE_URL}/Review/user/${mediaItemId}`, {
+            method: "GET",
+            headers: getAuthHeaders()
+        });
+        if (response.status === 404) return null;
+        return handleResponse(response);
+    },
+
+    getReviewsByMediaId: async (mediaItemId: number): Promise<any[]> => {
+        const response = await fetch(`${API_BASE_URL}/Review/media/${mediaItemId}`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+        if (!response.ok) return [];
+        return await response.json();
+    },
+
+    // --- SOCIAL (FOLLOW & ACTIVITY) ---
 
     followUser: async (followingId: number): Promise<UserFollowDTO> => {
-        const followerId = getUserIdFromToken();
-        if (!followerId) throw new Error("İşlem için oturum açmalısınız.");
-
-        // AddUserFollowDTO'ya göre: FollowerId BE'de token'dan çözülür.
         const followDto = { followingId };
-
         const response = await fetch(`${API_BASE_URL}/UserFollow`, {
             method: "POST",
             headers: getAuthHeaders(),
@@ -353,14 +442,57 @@ export const api = {
         return handleResponse(response);
     },
 
-    
+    getFeed: async (page: number = 1): Promise<any[]> => {
+        const mockFallback = mockActivities.map(a => ({ ...a, id: `${a.id}-${Math.random()}` }));
+        const response = await fetch(`${API_BASE_URL}/Activity?page=${page}`, {
+            method: "GET",
+            headers: getAuthHeaders(),
+        });
+        return handleResponse(response, mockFallback);
+    },
+
+    addLike: async (ratingId: number | null, reviewId: number | null): Promise<ActivityLikeDTO> => {
+        const likeDto = { ratingId: ratingId || null, reviewId: reviewId || null };
+        const response = await fetch(`${API_BASE_URL}/ActivityLike`, {
+            method: "POST",
+            headers: getAuthHeaders(),
+            body: JSON.stringify(likeDto),
+        });
+        return handleResponse(response);
+    },
+
+    removeLike: async (likeId: number): Promise<void> => {
+        const response = await fetch(`${API_BASE_URL}/ActivityLike/${likeId}`, {
+            method: "DELETE",
+            headers: getAuthHeaders(),
+        });
+        return handleResponse(response);
+    },
+
+    addActivityComment: async (text: string, ratingId: number | null, reviewId: number | null): Promise<ActivityCommentDTO> => {
+        const commentDto = { commentText: text, ratingId: ratingId || null, reviewId: reviewId || null };
+        const response = await fetch(`${API_BASE_URL}/ActivityComment`, {
+            method: "POST",
+            headers: getAuthHeaders(),
+            body: JSON.stringify(commentDto),
+        });
+        return handleResponse(response);
+    },
+
+    updateActivityComment: async (id: number, newText: string): Promise<void> => {
+        const updateDto = { id, commentText: newText };
+        const response = await fetch(`${API_BASE_URL}/ActivityComment/${id}`, {
+            method: "PUT",
+            headers: getAuthHeaders(),
+            body: JSON.stringify(updateDto),
+        });
+        return handleResponse(response);
+    },
+
+    // --- CUSTOM LISTS (BASIC CRUD) ---
+
     addCustomList: async (name: string, description: string = ""): Promise<CustomListDTO> => {
-        const userId = getUserIdFromToken();
-        if (!userId) throw new Error("İşlem için oturum açmalısınız.");
-
-        // AddCustomListDTO'ya göre: UserId BE'de token'dan çözülür.
         const listDto = { name, description };
-
         const response = await fetch(`${API_BASE_URL}/CustomList`, {
             method: "POST",
             headers: getAuthHeaders(),
@@ -369,7 +501,6 @@ export const api = {
         return handleResponse(response);
     },
 
-    // UpdateCustomListDTO
     updateCustomList: async (id: number, name: string, description: string = ""): Promise<void> => {
         const updateDto = { id, name, description };
         const response = await fetch(`${API_BASE_URL}/CustomList/${id}`, {
@@ -388,14 +519,8 @@ export const api = {
         return handleResponse(response);
     },
 
-
     addCustomListItem: async (customListId: number, mediaItemId: number): Promise<CustomListItemDTO> => {
-        const userId = getUserIdFromToken();
-        if (!userId) throw new Error("İşlem için oturum açmalısınız.");
-
-        // AddCustomListItemDTO'ya uygun.
         const itemDto = { customListId, mediaItemId };
-
         const response = await fetch(`${API_BASE_URL}/CustomListItem`, {
             method: "POST",
             headers: getAuthHeaders(),
@@ -410,97 +535,5 @@ export const api = {
             headers: getAuthHeaders(),
         });
         return handleResponse(response);
-    },
-
-    
-    // AddActivityLikeDTO
-    addLike: async (ratingId: number | null, reviewId: number | null): Promise<ActivityLikeDTO> => {
-        const userId = getUserIdFromToken();
-        if (!userId) throw new Error("İşlem için oturum açmalısınız.");
-
-        // AddActivityLikeDTO'ya uygun. UserId BE'de çözülmeli.
-        const likeDto = { ratingId: ratingId || null, reviewId: reviewId || null };
-
-        const response = await fetch(`${API_BASE_URL}/ActivityLike`, {
-            method: "POST",
-            headers: getAuthHeaders(),
-            body: JSON.stringify(likeDto),
-        });
-        return handleResponse(response);
-    },
-
-    removeLike: async (likeId: number): Promise<void> => {
-        const response = await fetch(`${API_BASE_URL}/ActivityLike/${likeId}`, {
-            method: "DELETE",
-            headers: getAuthHeaders(),
-        });
-        return handleResponse(response);
-    },
-
-    // AddActivityCommentDTO
-    addActivityComment: async (text: string, ratingId: number | null, reviewId: number | null): Promise<ActivityCommentDTO> => {
-        const userId = getUserIdFromToken();
-        if (!userId) throw new Error("İşlem için oturum açmalısınız.");
-
-        // AddActivityCommentDTO'ya uygun. UserId BE'de çözülmeli.
-        const commentDto = { commentText: text, ratingId: ratingId || null, reviewId: reviewId || null };
-
-        const response = await fetch(`${API_BASE_URL}/ActivityComment`, {
-            method: "POST",
-            headers: getAuthHeaders(),
-            body: JSON.stringify(commentDto),
-        });
-        return handleResponse(response);
-    },
-
-    // UpdateActivityCommentDTO
-    updateActivityComment: async (id: number, newText: string): Promise<void> => {
-        const updateDto = { id, commentText: newText };
-        const response = await fetch(`${API_BASE_URL}/ActivityComment/${id}`, {
-            method: "PUT",
-            headers: getAuthHeaders(),
-            body: JSON.stringify(updateDto),
-        });
-        return handleResponse(response);
-    },
-
-    // --- KULLANICININ BU MEDYA İÇİN PUANI ---
-    getUserRatingForMedia: async (mediaItemId: number): Promise<RatingDTO | null> => {
-        const response = await fetch(
-            `${API_BASE_URL}/Rating/user/${mediaItemId}`,
-            { method: "GET", headers: getAuthHeaders() }
-        );
-
-        if (response.status === 404) return null; // Kullanıcı puan vermemiş
-
-        return handleResponse(response);
-    },
-
-
-    // --- KULLANICININ BU MEDYA İÇİN İNCELEMESİ ---
-    getUserReviewForMedia: async (mediaItemId: number): Promise<ReviewDTO | null> => {
-        const response = await fetch(
-            `${API_BASE_URL}/Review/user/${mediaItemId}`,
-            { method: "GET", headers: getAuthHeaders() }
-        );
-
-        if (response.status === 404) return null; // Kullanıcı yorum yapmamış
-
-        return handleResponse(response);
-    },
-
-
-    // O Medyaya ait TÜM yorumları getir
-    getReviewsByMediaId: async (mediaItemId: number): Promise<any[]> => {
-        const response = await fetch(`${API_BASE_URL}/Review/media/${mediaItemId}`, {
-            method: "GET",
-            headers: getAuthHeaders(),
-        });
-
-        if (!response.ok) return [];
-        return await response.json();
-    },
-
-
-
+    }
 };
